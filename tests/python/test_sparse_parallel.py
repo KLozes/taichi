@@ -57,7 +57,6 @@ def test_pointer2():
 
 @ti.all_archs
 def test_nested_struct_fill_and_clear():
-  return # Until we fix this on Turing GPUs
   a = ti.var(dt=ti.f32)
   N = 512
 
@@ -82,3 +81,5 @@ def test_nested_struct_fill_and_clear():
 
   for i in range(10):
     task()
+    ti.sync()
+

@@ -3,7 +3,6 @@ from .core import taichi_lang_core
 from .expr import Expr
 from .snode import SNode
 from .util import *
-import numpy as np
 
 
 def expr_init(rhs):
@@ -109,12 +108,16 @@ class PyTaichi:
     assert ip in [i32, i64]
     self.default_ip = ip
     default_cfg().default_ip = self.default_ip
+    
+  def create_program(self):
+    if self.prog is None:
+      self.prog = taichi_lang_core.Program()
 
   def materialize(self):
     if self.materialized:
       return
+    self.create_program()
     Expr.layout_materialized = True
-    self.prog = taichi_lang_core.Program()
 
     def layout():
       for func in self.layout_functions:
@@ -169,14 +172,12 @@ def make_constant_expr(val):
 
 def reset():
   global pytaichi
-  global root
   old_kernels = pytaichi.kernels
   pytaichi.clear()
   pytaichi = PyTaichi(old_kernels)
   for k in old_kernels:
     k.reset()
   taichi_lang_core.reset_default_compile_config()
-  root = SNode(taichi_lang_core.get_root())
 
 
 def inside_kernel():
@@ -186,8 +187,19 @@ def inside_kernel():
 def index_nd(dim):
   return indices(*range(dim))
 
+class Root:
+  def __init__(self):
+    pass
+  
+  def __getattribute__(self, item):
+    import taichi as ti
+    ti.get_runtime().create_program()
+    root = SNode(ti.get_runtime().prog.get_root())
+    return getattr(root, item)
 
-def global_var(dt, shape=None, needs_grad=False):
+root = Root()
+
+def var(dt, shape=None, needs_grad=False):
   if isinstance(shape, numbers.Number):
     shape = (shape,)
 
@@ -205,30 +217,21 @@ def global_var(dt, shape=None, needs_grad=False):
     x.set_grad(x_grad)
 
   if shape is not None:
-
-    @layout
-    def place():
-      import taichi as ti
-      dim = len(shape)
-      ti.root.dense(index_nd(dim), shape).place(x)
-      if needs_grad:
-        ti.root.dense(index_nd(dim), shape).place(x.grad)
+    dim = len(shape)
+    root.dense(index_nd(dim), shape).place(x)
+    if needs_grad:
+      root.dense(index_nd(dim), shape).place(x.grad)
 
   return x
 
 
 class Layout:
-
   def __init__(self, soa=False):
     self.soa = soa
 
 
 SOA = Layout(soa=True)
 AOS = Layout(soa=False)
-
-var = global_var
-
-root = SNode(taichi_lang_core.get_root())
 
 
 def layout(func):

@@ -91,6 +91,11 @@ void export_lang(py::module &m) {
       .def("profiler_print", &Program::profiler_print)
       .def("profiler_print", &Program::profiler_clear)
       .def("finalize", &Program::finalize)
+      .def("get_root",
+           [&](Program *program) -> SNode * {
+             return program->snode_root.get();
+           },
+           py::return_value_policy::reference)
       .def("get_snode_writer", &Program::get_snode_writer)
       .def("get_total_compilation_time", &Program::get_total_compilation_time)
       .def("synchronize", &Program::synchronize);
@@ -187,8 +192,12 @@ void export_lang(py::module &m) {
           return Append(snode, indices, val);
         });
 
+  m.def("insert_is_active", [](SNode *snode, const ExprGroup &indices) {
+    return is_active(snode, indices);
+  });
+
   m.def("insert_len", [](SNode *snode, const ExprGroup &indices) {
-    return Probe(snode, indices);
+    return Length(snode, indices);
   });
 
   m.def("create_assert_stmt", [&](const Expr &cond, const std::string &msg) {
@@ -248,9 +257,6 @@ void export_lang(py::module &m) {
   });
 
   m.def("layout", layout);
-
-  m.def("get_root", [&]() -> SNode * { return &root; },
-        py::return_value_policy::reference);
 
   m.def("value_cast", static_cast<Expr (*)(const Expr &expr, DataType)>(cast));
 
