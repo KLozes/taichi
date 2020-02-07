@@ -80,13 +80,25 @@ class IRPrinter : public IRVisitor {
   }
 
   void visit(SNodeOpStmt *stmt) override {
-    std::string extras = stmt->ptr->raw_name();
+    std::string extras;
+    if (stmt->ptr)
+      extras = "ptr = " + stmt->ptr->name();
     if (stmt->val) {
-      extras += ", " + stmt->val->name();
+      extras += ", val = " + stmt->val->name();
+    }
+    if (!stmt->indices.empty()){
+      extras += " index [";
+      for (int i = 0; i < (int)stmt->indices.size(); i++) {
+        extras += fmt::format("{}", stmt->indices[i]->name());
+        if (i + 1 < (int)stmt->indices.size()) {
+          extras += ", ";
+        }
+      }
+      extras += "]";
     }
     std::string snode = stmt->snode->get_node_type_name_hinted();
-    print("{} : {} [{}] {}", stmt->name(), snode_op_type_name(stmt->op_type),
-          snode, extras);
+    print("{}{} = {} [{}] {}", stmt->type_hint(), stmt->name(),
+          snode_op_type_name(stmt->op_type), snode, extras);
   }
 
   void visit(AllocaStmt *alloca) override {

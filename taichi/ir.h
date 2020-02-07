@@ -1402,13 +1402,28 @@ class SNodeOpStmt : public Stmt {
   SNode *snode;
   Stmt *ptr;
   Stmt *val;
+  std::vector<Stmt *> indices;
 
   SNodeOpStmt(SNodeOpType op_type, SNode *snode, Stmt *ptr, Stmt *val = nullptr)
       : op_type(op_type), snode(snode), ptr(ptr), val(val) {
-    TC_ASSERT((val == nullptr) != (op_type == SNodeOpType::append));
+    TC_ASSERT((val == nullptr) != (op_type == SNodeOpType::append ||
+                                   op_type == SNodeOpType::is_active));
     add_operand(this->ptr);
     if (val)
       add_operand(this->val);
+    width() = 1;
+    element_type() = DataType::i32;
+  }
+
+  SNodeOpStmt(SNodeOpType op_type, SNode *snode, std::vector<Stmt *> indices)
+      : op_type(op_type), snode(snode), indices(indices) {
+    ptr = nullptr;
+    val = nullptr;
+    TC_ASSERT(op_type == SNodeOpType::is_active);
+    add_operand(this->ptr);
+    for (int i = 0; i < (int)indices.size(); i++) {
+      add_operand(this->indices[i]);
+    }
     width() = 1;
     element_type() = DataType::i32;
   }
@@ -1968,11 +1983,12 @@ class SNodeOpExpression : public Expression {
 
   std::string serialize() override {
     if (value.expr) {
-      return fmt::format("append({}, [{}], {})",
+      return fmt::format("{}({}, [{}], {})", snode_op_type_name(op_type),
                          snode->get_node_type_name_hinted(),
                          indices.serialize(), value.serialize());
     } else {
-      return fmt::format("probe({}, [{}])", snode->get_node_type_name_hinted(),
+      return fmt::format("{}({}, [{}])", snode_op_type_name(op_type),
+                         snode->get_node_type_name_hinted(),
                          indices.serialize());
     }
   }
@@ -1983,21 +1999,28 @@ class SNodeOpExpression : public Expression {
       indices[i]->flatten(ret);
       indices_stmt.push_back(indices[i]->stmt);
     }
-    auto ptr = ret.push_back<GlobalPtrStmt>(snode, indices_stmt);
-    if (op_type == SNodeOpType::append) {
-      value->flatten(ret);
-      ret.push_back<SNodeOpStmt>(SNodeOpType::append, snode, ptr,
-                                 ret.back().get());
-      TC_ERROR_IF(snode->type != SNodeType::dynamic,
-                  "ti.append only works on dynamic nodes.");
-      TC_ERROR_IF(snode->ch.size() != 1,
-                  "ti.append only works on single-child dynamic nodes.");
-      TC_ERROR_IF(data_type_size(snode->ch[0]->dt) != 4,
-                  "ti.append only works on i32/f32 nodes.");
-    } else if (op_type == SNodeOpType::length) {
-      ret.push_back<SNodeOpStmt>(SNodeOpType::length, snode, ptr, nullptr);
-    } else if (op_type == SNodeOpType::is_active) {
-      ret.push_back<SNodeOpStmt>(SNodeOpType::is_active, snode, ptr, nullptr);
+    if (op_type == SNodeOpType::is_active) {
+      // is_active cannot be lowered all the way to a global pointer.
+      // It should be lowered into a pointer to parent and an index.
+      TC_ERROR_IF(
+          snode->type != SNodeType::pointer && snode->type != SNodeType::hash,
+          "ti.is_active only works on hash and pointer nodes.");
+      ret.push_back<SNodeOpStmt>(SNodeOpType::is_active, snode, indices_stmt);
+    } else {
+      auto ptr = ret.push_back<GlobalPtrStmt>(snode, indices_stmt);
+      if (op_type == SNodeOpType::append) {
+        value->flatten(ret);
+        ret.push_back<SNodeOpStmt>(SNodeOpType::append, snode, ptr,
+                                   ret.back().get());
+        TC_ERROR_IF(snode->type != SNodeType::dynamic,
+                    "ti.append only works on dynamic nodes.");
+        TC_ERROR_IF(snode->ch.size() != 1,
+                    "ti.append only works on single-child dynamic nodes.");
+        TC_ERROR_IF(data_type_size(snode->ch[0]->dt) != 4,
+                    "ti.append only works on i32/f32 nodes.");
+      } else if (op_type == SNodeOpType::length) {
+        ret.push_back<SNodeOpStmt>(SNodeOpType::length, snode, ptr, nullptr);
+      }
     }
     stmt = ret.back().get();
   }

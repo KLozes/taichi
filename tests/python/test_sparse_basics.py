@@ -53,11 +53,9 @@ def test_pointer():
   
 @ti.all_archs
 def test_pointer_is_active():
-  return
   x = ti.var(ti.f32)
   s = ti.var(ti.i32)
-  ti.cfg.print_ir = True
-  
+
   n = 128
   
   ti.root.dense(ti.i, n).pointer().dense(ti.i, n).place(x)
