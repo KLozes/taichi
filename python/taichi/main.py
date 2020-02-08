@@ -28,7 +28,6 @@ def test_cpp():
     print("Skipping legacy tests (no GPU support)")
     return 0
   # Cpp tests use the legacy non LLVM backend
-  os.environ['TI_LLVM'] = '0'
   ti.reset()
   print("Running C++ tests...")
   task = ti.Task('test')
@@ -41,14 +40,16 @@ def main(debug=False):
   lines.append(u' *******************************************')
   lines.append(u' **     Taichi Programming Language       **')
   lines.append(u' *******************************************')
+  if 'TI_DEBUG' in os.environ:
+    val = os.environ['TI_DEBUG']
+    if val not in ['0', '1']:
+      raise ValueError("Environment variable TI_DEBUG can only have value 0 or 1.")
   if debug:
     lines.append(u' *****************Debug Mode****************')
     os.environ['TI_DEBUG'] = '1'
   print(u'\n'.join(lines))
   print()
   import taichi as ti
-
-  ti.tc_core.set_core_debug(debug)
 
   argc = len(sys.argv)
   if argc == 1 or sys.argv[1] == 'help':
