@@ -1,6 +1,5 @@
 import numbers
 import numpy as np
-import ctypes
 
 class GUI:
   def __init__(self, name, res=512, background_color=0x0):
@@ -44,9 +43,7 @@ class GUI:
     self.core.set_img(np.ascontiguousarray(img).ctypes.data)
     
   def circle(self, pos, color, radius=1):
-    import taichi as ti
-    self.canvas.circle(ti.vec(pos[0],
-                         pos[1])).radius(radius).color(color).finish()
+    self.canvas.circle_single(pos[0], pos[1], color, radius)
     
   def circles(self, pos, color=0xFFFFFF, radius=1):
     n = pos.shape[0]
@@ -82,8 +79,16 @@ class GUI:
     
     self.canvas.circles_batched(n, pos, color_single, color_array, radius_single, radius_array)
     
+  def line(self, begin, end, radius, color):
+    import taichi as ti
+    self.canvas.path(ti.vec(*begin), ti.vec(*end)).radius(radius).color(color).finish()
+    
   def show(self, file=None):
     self.core.update()
     if file:
       self.core.screenshot(file)
     self.clear(self.background_color)
+
+def rgb_to_hex(c):
+  to255 = lambda x: min(255, max(0, int(x * 255)))
+  return 65536 * to255(c[0]) + 256 * to255(c[1]) + to255(c[2])
