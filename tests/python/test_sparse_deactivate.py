@@ -10,7 +10,7 @@ def test_pointer():
 
   @ti.layout
   def place():
-    ti.root.dense(ti.i, n).pointer().dense(ti.i, n).place(x)
+    ti.root.pointer(ti.i, n).dense(ti.i, n).place(x)
     ti.root.place(s)
 
   s[None] = 0
@@ -43,7 +43,7 @@ def test_pointer2():
 
   @ti.layout
   def place():
-    ti.root.dense(ti.i, n).pointer().dense(ti.i, n).place(x)
+    ti.root.pointer(ti.i, n).dense(ti.i, n).place(x)
 
   @ti.kernel
   def func():
@@ -56,8 +56,8 @@ def test_pointer2():
 
   @ti.kernel
   def clear():
-    for i in x.parent().parent():
-      ti.deactivate(x.parent().parent(),i)
+    for i in x.parent():
+      ti.deactivate(x.parent().parent(), i)
 
   func()
   clear()
@@ -82,8 +82,8 @@ def test_pointer3():
 
   @ti.layout
   def place():
-    ti.root.dense(ti.ij, n).pointer().dense(ti.ij, n).place(x)
-    ti.root.dense(ti.ij, n).pointer().dense(ti.ij, n).place(x_temp)
+    ti.root.pointer(ti.ij, n).dense(ti.ij, n).place(x)
+    ti.root.pointer(ti.ij, n).dense(ti.ij, n).place(x_temp)
 
   @ti.kernel
   def fill():
@@ -136,8 +136,6 @@ def test_pointer3():
         if i+j < 100:
           assert x[i,j] == i+j
 
-
-
 @ti.archs_support_sparse
 def test_dynamic():
   x = ti.var(ti.i32)
@@ -155,26 +153,34 @@ def test_dynamic():
     for i in range(n):
       for j in range(i * i * mul):
         ti.append(x.parent(), i, j)
+      
+  @ti.kernel
+  def fetch_length():
+    for i in range(n):
       s[i] = ti.length(x.parent(), i)
 
 
   func(1)
-
+  fetch_length()
   for i in range(n):
     assert s[i] == i * i
 
   @ti.kernel
   def clear():
     for i in range(n):
-      ti.deactivate(x.parent(), i)
+      ti.deactivate(x.parent(), [i])
 
   func(2)
-
+  fetch_length()
   for i in range(n):
     assert s[i] == i * i * 3
 
   clear()
+  fetch_length()
+  for i in range(n):
+    assert s[i] == 0
+    
   func(4)
-
+  fetch_length()
   for i in range(n):
     assert s[i] == i * i * 4

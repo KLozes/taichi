@@ -102,7 +102,7 @@ void export_lang(py::module &m) {
       .def(py::init<>())
       .def_readonly("config", &Program::config)
       .def("profiler_print", &Program::profiler_print)
-      .def("profiler_print", &Program::profiler_clear)
+      .def("profiler_clear", &Program::profiler_clear)
       .def("finalize", &Program::finalize)
       .def("get_root",
            [&](Program *program) -> SNode * {
@@ -131,9 +131,16 @@ void export_lang(py::module &m) {
            (SNode & (SNode::*)(const std::vector<Index> &,
                                const std::vector<int> &))(&SNode::dense),
            py::return_value_policy::reference)
+      .def("pointer",
+          (SNode & (SNode::*)(const std::vector<Index> &,
+                              const std::vector<int> &))(&SNode::pointer),
+          py::return_value_policy::reference)
+      .def("hash",
+          (SNode & (SNode::*)(const std::vector<Index> &,
+                              const std::vector<int> &))(&SNode::hash),
+          py::return_value_policy::reference)
       .def("dynamic", &SNode::dynamic_chunked,
            py::return_value_policy::reference)
-      .def("pointer", &SNode::pointer, py::return_value_policy::reference)
       .def("bitmasked", &SNode::bitmasked)
       .def("place", (SNode & (SNode::*)(Expr &))(&SNode::place),
            py::return_value_policy::reference)
@@ -293,6 +300,7 @@ void export_lang(py::module &m) {
   m.def("expr_max", expr_max);
   m.def("expr_min", expr_min);
   m.def("expr_atan2", expr_atan2);
+  m.def("expr_pow", expr_pow);
 
   m.def("expr_bit_and", expr_bit_and);
   m.def("expr_bit_or", expr_bit_or);

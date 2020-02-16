@@ -199,8 +199,8 @@ class CodeGenLLVM : public IRVisitor, public ModuleBuilder {
       meta->call("set_bitmasked", tlctx->get_constant(snode->_bitmasked));
       meta->call("set_morton_dim", tlctx->get_constant((int)snode->_morton));
     } else if (snode->type == SNodeType::pointer) {
-      meta = std::make_unique<RuntimeObject>("PointerMeta", this, builder);
-      emit_struct_meta_base("Pointer", meta->ptr, snode);
+      meta = std::make_unique<RuntimeObject>("pointerMeta", this, builder);
+      emit_struct_meta_base("pointer", meta->ptr, snode);
     } else if (snode->type == SNodeType::root) {
       meta = std::make_unique<RuntimeObject>("RootMeta", this, builder);
       emit_struct_meta_base("Root", meta->ptr, snode);
@@ -488,6 +488,44 @@ class CodeGenLLVM : public IRVisitor, public ModuleBuilder {
         } else if (ret_type == DataType::f64) {
           stmt->value =
               create_call("__nv_atan2", {stmt->lhs->value, stmt->rhs->value});
+        } else {
+          TC_P(data_type_name(ret_type));
+          TC_NOT_IMPLEMENTED
+        }
+      } else {
+        TC_NOT_IMPLEMENTED
+      }
+    } else if (op == BinaryOpType::pow) {
+      if (current_arch() == Arch::x86_64) {
+        if (ret_type == DataType::f32) {
+          stmt->value =
+              create_call("pow_f32", {stmt->lhs->value, stmt->rhs->value});
+        } else if (ret_type == DataType::f64) {
+          stmt->value =
+              create_call("pow_f64", {stmt->lhs->value, stmt->rhs->value});
+        } else if (ret_type == DataType::i32) {
+          stmt->value =
+              create_call("pow_i32", {stmt->lhs->value, stmt->rhs->value});
+        } else if (ret_type == DataType::i64) {
+          stmt->value =
+              create_call("pow_i64", {stmt->lhs->value, stmt->rhs->value});
+        } else {
+          TC_P(data_type_name(ret_type));
+          TC_NOT_IMPLEMENTED
+        }
+      } else if (current_arch() == Arch::cuda) {
+        if (ret_type == DataType::f32) {
+          stmt->value =
+              create_call("__nv_powf", {stmt->lhs->value, stmt->rhs->value});
+        } else if (ret_type == DataType::f64) {
+          stmt->value =
+              create_call("__nv_pow", {stmt->lhs->value, stmt->rhs->value});
+        } else if (ret_type == DataType::i32) {
+          stmt->value =
+              create_call("pow_i32", {stmt->lhs->value, stmt->rhs->value});
+        } else if (ret_type == DataType::i64) {
+          stmt->value =
+              create_call("pow_i64", {stmt->lhs->value, stmt->rhs->value});
         } else {
           TC_P(data_type_name(ret_type));
           TC_NOT_IMPLEMENTED
@@ -875,9 +913,12 @@ class CodeGenLLVM : public IRVisitor, public ModuleBuilder {
       stmt->value =
           call(snode, stmt->ptr->value, "is_active", {stmt->val->value});
     } else if (stmt->op_type == SNodeOpType::deactivate) {
-      TC_ASSERT(snode->type == SNodeType::pointer ||
-                snode->type == SNodeType::dynamic);
-      stmt->value = call(snode, stmt->ptr->value, "deactivate", {});
+      if (snode->type == SNodeType::pointer || snode->type == SNodeType::hash) {
+        stmt->value =
+            call(snode, stmt->ptr->value, "deactivate", {stmt->val->value});
+      } else if (snode->type == SNodeType::dynamic) {
+        stmt->value = call(snode, stmt->ptr->value, "deactivate", {});
+      }
     } else {
       TC_NOT_IMPLEMENTED
     }
@@ -948,7 +989,7 @@ class CodeGenLLVM : public IRVisitor, public ModuleBuilder {
     } else if (snode->type == SNodeType::dynamic) {
       return "Dynamic";
     } else if (snode->type == SNodeType::pointer) {
-      return "Pointer";
+      return "pointer";
     } else if (snode->type == SNodeType::hash) {
       return "Hash";
     } else {
@@ -970,6 +1011,7 @@ class CodeGenLLVM : public IRVisitor, public ModuleBuilder {
                                       llvm::Type::getInt8PtrTy(*llvm_context));
 
     std::vector<llvm::Value *> func_arguments{s_ptr, node_ptr};
+
     func_arguments.insert(func_arguments.end(), arguments.begin(),
                           arguments.end());
 

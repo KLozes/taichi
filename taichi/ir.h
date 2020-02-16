@@ -1363,7 +1363,9 @@ class Block : public IRNode {
 
   template <typename T, typename... Args>
   Stmt *push_back(Args &&... args) {
-    statements.emplace_back(std::make_unique<T>(std::forward<Args>(args)...));
+    auto stmt = std::make_unique<T>(std::forward<Args>(args)...);
+    stmt->parent = this;
+    statements.emplace_back(std::move(stmt));
     return back();
   }
 
@@ -1421,8 +1423,6 @@ class SNodeOpStmt : public Stmt {
 
   SNodeOpStmt(SNodeOpType op_type, SNode *snode, Stmt *ptr, Stmt *val = nullptr)
       : op_type(op_type), snode(snode), ptr(ptr), val(val) {
-    TC_ASSERT((val == nullptr) != (op_type == SNodeOpType::append ||
-                                   op_type == SNodeOpType::is_active));
     add_operand(this->ptr);
     if (val)
       add_operand(this->val);
@@ -1434,13 +1434,19 @@ class SNodeOpStmt : public Stmt {
       : op_type(op_type), snode(snode), indices(indices) {
     ptr = nullptr;
     val = nullptr;
-    TC_ASSERT(op_type == SNodeOpType::is_active);
+    TC_ASSERT(op_type == SNodeOpType::is_active ||
+              op_type == SNodeOpType::deactivate);
     add_operand(this->ptr);
     for (int i = 0; i < (int)indices.size(); i++) {
       add_operand(this->indices[i]);
     }
     width() = 1;
     element_type() = DataType::i32;
+  }
+
+  static bool activation_related(SNodeOpType op) {
+    return op == SNodeOpType::activate || op == SNodeOpType::deactivate ||
+           op == SNodeOpType::is_active;
   }
 
   DEFINE_ACCEPT

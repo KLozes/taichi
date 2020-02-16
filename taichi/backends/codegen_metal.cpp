@@ -1,8 +1,7 @@
 #include "codegen_metal.h"
 
+#include <string>
 #include <taichi/ir.h>
-
-#ifdef TC_SUPPORTS_METAL
 
 TLANG_NAMESPACE_BEGIN
 namespace metal {
@@ -21,9 +20,7 @@ class MetalKernelCodegen : public IRVisitor {
     // allow_undefined_visitor = true;
   }
 
-  const std::string &kernel_source_code() const {
-    return kernel_src_code_;
-  }
+  const std::string &kernel_source_code() const { return kernel_src_code_; }
 
   const std::vector<MetalKernelAttributes> &kernels_attribs() const {
     return mtl_kernels_attribs_;
@@ -240,15 +237,8 @@ class MetalKernelCodegen : public IRVisitor {
     const auto bin_name = bin->raw_name();
     if (bin->op_type == BinaryOpType::floordiv) {
       if (is_integral(bin->element_type())) {
-        const auto intm = fmt::format("{}_intermediate_", bin_name);
-        emit("const {} {} = ({} / {});", dt_name, intm, lhs_name, rhs_name);
-        // Should we construct an AST for this?
-        const auto expr_str = fmt::format(
-            "(({lhs} * {rhs} < 0) && ({rhs} * {intm} != {lhs})) ? ({intm} - 1) "
-            ": {intm}",
-            fmt::arg("lhs", lhs_name), fmt::arg("rhs", rhs_name),
-            fmt::arg("intm", intm));
-        emit("const {} {} = ({});", dt_name, bin_name, expr_str);
+        emit("const {} {} = ifloordiv({}, {});", dt_name, bin_name, lhs_name,
+             rhs_name);
       } else {
         emit("const {} {} = floor({} / {});", dt_name, bin_name, lhs_name,
              rhs_name);
@@ -284,27 +274,8 @@ class MetalKernelCodegen : public IRVisitor {
           "metal::memory_order_relaxed);",
           stmt->raw_name(), stmt->dest->raw_name(), stmt->val->raw_name());
     } else if (dt == DataType::f32) {
-      // A huge hack! Metal does not support atomic floating point numbers
-      // natively.
-      const auto dest_name = stmt->dest->raw_name();
-      const auto cas_ok = fmt::format("{}_cas_ok_", dest_name);
-      const auto old_val = fmt::format("{}_old_", dest_name);
-      const auto new_val = fmt::format("{}_new_", dest_name);
-      emit("bool {} = false;", cas_ok);
-      emit("float {} = 0.0f;", stmt->raw_name());
-      emit("while (!{}) {{", cas_ok);
-      push_indent();
-      emit("float {} = *{};", old_val, dest_name);
-      emit("float {} = ({} + {});", new_val, old_val, stmt->val->raw_name());
-      emit("{} = atomic_compare_exchange_weak_explicit(", cas_ok);
-      emit("            (device atomic_int *){},", dest_name);
-      emit("            (thread int*)(&{}),", old_val);
-      emit("            *((thread int *)(&{})),", new_val);
-      emit("            metal::memory_order_relaxed,");
-      emit("            metal::memory_order_relaxed);");
-      emit("{} = {};", stmt->raw_name(), old_val);
-      pop_indent();
-      emit("}}");
+      emit("const float {} = fatomic_fetch_add({}, {});", stmt->raw_name(),
+           stmt->dest->raw_name(), stmt->val->raw_name());
     } else {
       TC_NOT_IMPLEMENTED;
     }
@@ -399,21 +370,17 @@ class MetalKernelCodegen : public IRVisitor {
     emit("namespace {{");
     emit("");
     generate_common_functions();
-    emit("");
     kernel_src_code_ += snode_structs_source_code;
     emit("}}  // namespace");
     emit("");
   }
 
   void generate_common_functions() {
-    // For some reason, if I emit taichi/common.h's union_cast(), Metal failed
-    // to compile. More strangely, if I copy the generated code to XCode as a
-    // Metal kernel, it compiled successfully...
-    emit("template <typename T, typename G>");
-    emit("T union_cast(G g) {{");
-    emit("  static_assert(sizeof(T) == sizeof(G), \"Size mismatch\");");
-    emit("  return *reinterpret_cast<thread const T*>(&g);");
-    emit("}}");
+#define TC_INSIDE_METAL_CODEGEN
+#include <taichi/platform/metal/helpers.metal.h>
+    kernel_src_code_ += kMetalHelpersSourceCode;
+#undef TC_INSIDE_METAL_CODEGEN
+    emit("\n");
   }
 
   void generate_kernel_args_struct(Kernel *kernel) {
@@ -557,9 +524,7 @@ class MetalKernelCodegen : public IRVisitor {
     }
   }
 
-  void push_indent() {
-    indent_ += "  ";
-  }
+  void push_indent() { indent_ += "  "; }
 
   void pop_indent() {
     indent_.pop_back();
@@ -591,11 +556,9 @@ MetalCodeGen::MetalCodeGen(const std::string &kernel_name,
                            const StructCompiledResult *struct_compiled)
     : id_(CodeGenBase::get_kernel_id()),
       taichi_kernel_name_(fmt::format("mtl_k{:04d}_{}", id_, kernel_name)),
-      struct_compiled_(struct_compiled) {
-}
+      struct_compiled_(struct_compiled) {}
 
-FunctionType MetalCodeGen::compile(Program &,
-                                   Kernel &kernel,
+FunctionType MetalCodeGen::compile(Program &, Kernel &kernel,
                                    MetalRuntime *runtime) {
   this->prog_ = &kernel.program;
   this->kernel_ = &kernel;
@@ -739,5 +702,3 @@ FunctionType MetalCodeGen::gen(const SNode &root_snode, MetalRuntime *runtime) {
 
 }  // namespace metal
 TLANG_NAMESPACE_END
-
-#endif  // TC_SUPPORTS_METAL
