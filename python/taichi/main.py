@@ -6,7 +6,7 @@ import random
 from taichi.tools.video import make_video, interpolate_frames, mp4_to_gif, scale_video, crop_video, accelerate_video
 
 
-def test_python(test_files=None, verbose=False):
+def test_python(test_files=(), verbose=False):
   print("\nRunning python tests...\n")
   import taichi as ti
   import pytest
@@ -17,26 +17,39 @@ def test_python(test_files=None, verbose=False):
     test_dir = ti.get_repo_directory()
   test_dir = os.path.join(test_dir, 'tests', 'python')
   args = []
-  if test_files:
+  if len(test_files):
     # run individual tests
     for f in test_files:
+      # auto-compelete
+      if not f.startswith('test_'):
+        f = 'test_' + f
+      if not f.endswith('.py'):
+        f = f + '.py'
       args.append(os.path.join(test_dir, f))
   else:
     # run all the tests
     args = [test_dir]
   if verbose:
     args += ['-s']
-
+  if len(test_files) == 0 or len(test_files) > 4:
+    if int(pytest.main(['misc/empty_pytest.py', '-n1'])) == 0: # if pytest has xdist
+      try:
+        from multiprocessing import cpu_count
+        cpu_count = cpu_count()
+      except:
+        cpu_count = 2
+      print(f'Starting {cpu_count} testing thread(s)...')
+      args += ['-n', str(cpu_count)]
   return int(pytest.main(args))
 
 
-def test_cpp():
+def test_cpp(test_files=()):
   import taichi as ti
   # Cpp tests use the legacy non LLVM backend
   ti.reset()
   print("Running C++ tests...")
   task = ti.Task('test')
-  return int(task.run(*sys.argv[2:]))
+  return int(task.run(*test_files))
 
 
 def main(debug=False):
@@ -102,13 +115,14 @@ def main(debug=False):
   elif mode == "test_python":
     return test_python(test_files=sys.argv[2:])
   elif mode == "test_cpp":
-    return test_cpp()
+    return test_cpp(test_files=sys.argv[2:])
   elif mode == "test":
-    if test_python() != 0:
+    if test_python(test_files=sys.argv[2:]) != 0:
       return -1
-    return test_cpp()
+    if len(sys.argv) <= 2:
+      return test_cpp()
   elif mode == "test_verbose":
-    if test_python(verbose=True) != 0:
+    if test_python(test_files=sys.argv[2:], verbose=True) != 0:
       return -1
     return test_cpp()
   elif mode == "build":
@@ -127,15 +141,6 @@ def main(debug=False):
     os.system(r"sed '/^\s*\.\(L[A-Z]\|[a-z]\)/ d' {0} > clean_{0}".format(fn))
   elif mode == "interpolate":
     interpolate_frames('.')
-  elif mode == "amal":
-    cwd = os.getcwd()
-    os.chdir(ti.get_repo_directory())
-    with open('misc/amalgamate.py') as script:
-      script = script.read()
-    exec(script, {'__name__': '__main__'})
-    os.chdir(cwd)
-    shutil.copy(
-        os.path.join(ti.get_repo_directory(), 'build/taichi.h'), './taichi.h')
   elif mode == "doc":
     os.system('cd {}/docs && sphinx-build -b html . build'.format(ti.get_repo_directory()))
   elif mode == "video":

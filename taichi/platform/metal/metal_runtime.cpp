@@ -1,7 +1,11 @@
 #include "metal_runtime.h"
 
+#include <taichi/arithmetic.h>
+#include <taichi/constants.h>
+
 #include <algorithm>
 #include <cstring>
+#include <string_view>
 
 #define TI_RUNTIME_HOST
 #include <taichi/context.h>
@@ -28,10 +32,9 @@ using KernelTaskType = OffloadedStmt::TaskType;
 class BufferMemoryView {
  public:
   BufferMemoryView(size_t size, MemoryPool *mem_pool) {
-    const size_t pagesize = getpagesize();
     // Both |ptr_| and |size_| must be aligned to page size.
-    size_ = ((size + pagesize - 1) / pagesize) * pagesize;
-    ptr_ = mem_pool->allocate(size_, pagesize);
+    size_ = iroundup(size, taichi_page_size);
+    ptr_ = mem_pool->allocate(size_, /*alignment=*/taichi_page_size);
     TI_ASSERT(ptr_ != nullptr);
   }
 
@@ -43,24 +46,35 @@ class BufferMemoryView {
   void *ptr_;
 };
 
+struct MtlDataBuffers {
+  MTLBuffer *root;
+  MTLBuffer *global_tmps;
+  MTLBuffer *args;  // nullable
+};
+
 // Info for launching a compiled Metal kernel
 class CompiledMtlKernel {
  public:
-  CompiledMtlKernel(const MetalKernelAttributes &md, MTLDevice *device,
-                    MTLFunction *func, ProfilerBase *profiler)
-      : kernel_attribs_(md),
-        pipeline_state_(new_compute_pipeline_state_with_function(device, func)),
-        profiler_(profiler),
+  struct Params {
+    const MetalKernelAttributes *kerenl_attribs;
+    MTLDevice *device;
+    MTLFunction *mtl_func;
+    ProfilerBase *profiler;
+  };
+
+  CompiledMtlKernel(Params params)
+      : kernel_attribs_(*params.kerenl_attribs),
+        pipeline_state_(new_compute_pipeline_state_with_function(
+            params.device, params.mtl_func)),
+        profiler_(params.profiler),
         profiler_id_(fmt::format("{}_dispatch", kernel_attribs_.name)) {
     TI_ASSERT(pipeline_state_ != nullptr);
   }
 
-  void launch(MTLBuffer *root_buffer, MTLBuffer *global_tmps_buffer,
-              MTLBuffer *args_buffer, MTLCommandBuffer *command_buffer) {
+  void launch(MtlDataBuffers data_buffers, MTLCommandBuffer *command_buffer) {
     // 0 is valid for |num_threads|!
     TI_ASSERT(kernel_attribs_.num_threads >= 0);
-    launch_if_not_empty(root_buffer, global_tmps_buffer, args_buffer,
-                        command_buffer);
+    launch_if_not_empty(std::move(data_buffers), command_buffer);
     if ((kernel_attribs_.task_type == KernelTaskType::range_for) &&
         !kernel_attribs_.range_for_attribs.const_range()) {
       // Set |num_thread| to an invalid number to make sure the next launch
@@ -69,14 +83,10 @@ class CompiledMtlKernel {
     }
   }
 
-  inline MetalKernelAttributes *kernel_attribs() {
-    return &kernel_attribs_;
-  }
+  inline MetalKernelAttributes *kernel_attribs() { return &kernel_attribs_; }
 
  private:
-  void launch_if_not_empty(MTLBuffer *root_buffer,
-                           MTLBuffer *global_tmps_buffer,
-                           MTLBuffer *args_buffer,
+  void launch_if_not_empty(MtlDataBuffers data_buffers,
                            MTLCommandBuffer *command_buffer) {
     const int num_threads = kernel_attribs_.num_threads;
     if (num_threads == 0) {
@@ -88,11 +98,13 @@ class CompiledMtlKernel {
 
     set_compute_pipeline_state(encoder.get(), pipeline_state_.get());
     int buffer_index = 0;
-    set_mtl_buffer(encoder.get(), root_buffer, /*offset=*/0, buffer_index++);
-    set_mtl_buffer(encoder.get(), global_tmps_buffer, /*offset=*/0,
+    set_mtl_buffer(encoder.get(), data_buffers.root, /*offset=*/0,
                    buffer_index++);
-    if (args_buffer) {
-      set_mtl_buffer(encoder.get(), args_buffer, /*offset=*/0, buffer_index++);
+    set_mtl_buffer(encoder.get(), data_buffers.global_tmps, /*offset=*/0,
+                   buffer_index++);
+    if (data_buffers.args) {
+      set_mtl_buffer(encoder.get(), data_buffers.args, /*offset=*/0,
+                     buffer_index++);
     }
     const int num_threads_per_group =
         get_max_total_threads_per_threadgroup(pipeline_state_.get());
@@ -114,38 +126,46 @@ class CompiledMtlKernel {
 // compiled Metal kernels.
 class CompiledTaichiKernel {
  public:
-  CompiledTaichiKernel(
-      const std::string &taichi_kernel_name, const std::string &source_code,
-      const std::vector<MetalKernelAttributes> &mtl_kernels_attribs,
-      size_t global_tmps_size, const MetalKernelArgsAttributes &args_attribs,
-      MTLDevice *device, MemoryPool *mem_pool, ProfilerBase *profiler)
-      : global_tmps_mem(global_tmps_size, mem_pool),
-        args_attribs(args_attribs),
-        mtl_source_code_(source_code),
-        profiler_(profiler) {
+  struct Params {
+    std::string_view taichi_kernel_name;
+    std::string_view mtl_source_code;
+    const std::vector<MetalKernelAttributes> *mtl_kernels_attribs;
+    const MetalKernelArgsAttributes *args_attribs;
+    MTLDevice *device;
+    MemoryPool *mem_pool;
+    ProfilerBase *profiler;
+  };
+
+  CompiledTaichiKernel(Params params)
+      : args_attribs(*params.args_attribs),
+        mtl_source_code_(params.mtl_source_code),
+        profiler_(params.profiler) {
+    auto *const device = params.device;
     auto kernel_lib = new_library_with_source(device, mtl_source_code_);
     TI_ASSERT(kernel_lib != nullptr);
-    for (const auto &ka : mtl_kernels_attribs) {
-      auto kernel_func = new_function_with_name(kernel_lib.get(), ka.name);
-      TI_ASSERT(kernel_func != nullptr);
+    for (const auto &ka : *(params.mtl_kernels_attribs)) {
+      auto mtl_func = new_function_with_name(kernel_lib.get(), ka.name);
+      TI_ASSERT(mtl_func != nullptr);
       // Note that CompiledMtlKernel doesn't own |kernel_func|.
-      compiled_mtl_kernels.push_back(std::make_unique<CompiledMtlKernel>(
-          ka, device, kernel_func.get(), profiler_));
+      CompiledMtlKernel::Params params;
+      params.kerenl_attribs = &ka;
+      params.device = device;
+      params.mtl_func = mtl_func.get();
+      params.profiler = profiler_;
+      compiled_mtl_kernels.push_back(
+          std::make_unique<CompiledMtlKernel>(params));
     }
-    global_tmps_buffer = new_mtl_buffer_no_copy(device, global_tmps_mem.ptr(),
-                                                global_tmps_mem.size());
     if (args_attribs.has_args()) {
       args_mem = std::make_unique<BufferMemoryView>(args_attribs.total_bytes(),
-                                                    mem_pool);
+                                                    params.mem_pool);
       args_buffer =
           new_mtl_buffer_no_copy(device, args_mem->ptr(), args_mem->size());
     }
   }
+
   // Have to be exposed as public for Impl to use. We cannot friend the Impl
   // class because it is private.
   std::vector<std::unique_ptr<CompiledMtlKernel>> compiled_mtl_kernels;
-  BufferMemoryView global_tmps_mem;
-  nsobj_unique_ptr<MTLBuffer> global_tmps_buffer;
   MetalKernelArgsAttributes args_attribs;
   std::unique_ptr<BufferMemoryView> args_mem{nullptr};
   nsobj_unique_ptr<MTLBuffer> args_buffer{nullptr};
@@ -243,12 +263,10 @@ class HostMetalArgsBlitter {
 
 class MetalRuntime::Impl {
  public:
-  Impl(size_t root_size, CompileConfig *config, MemoryPool *mem_pool,
-       ProfilerBase *profiler)
-      : config_(config),
-        mem_pool_(mem_pool),
-        profiler_(profiler),
-        root_buffer_mem_(std::max(root_size, 1UL), mem_pool) {
+  explicit Impl(Params params)
+      : config_(params.config),
+        mem_pool_(params.mem_pool),
+        profiler_(params.profiler) {
     if (config_->debug) {
       TI_ASSERT(is_metal_api_available());
     }
@@ -257,9 +275,41 @@ class MetalRuntime::Impl {
     command_queue_ = new_command_queue(device_.get());
     TI_ASSERT(command_queue_ != nullptr);
     create_new_command_buffer();
-    root_buffer_ = new_mtl_buffer_no_copy(device_.get(), root_buffer_mem_.ptr(),
-                                          root_buffer_mem_.size());
+
+    auto *llvm_ctx = params.llvm_ctx;
+    auto *llvm_rtm = params.llvm_runtime;
+    const size_t rtm_root_mem_size = llvm_ctx->lookup_function<size_t(void *)>(
+        "Runtime_get_root_mem_size")(llvm_rtm);
+    if (rtm_root_mem_size > 0) {
+      // Make sure the runtime's root memory is large enough.
+      TI_ASSERT(iroundup(params.root_size, taichi_page_size) <=
+                rtm_root_mem_size);
+      auto *rtm_root_mem = params.llvm_ctx->lookup_function<uint8 *(void *)>(
+          "Runtime_get_root")(llvm_rtm);
+      root_buffer_ = new_mtl_buffer_no_copy(device_.get(), rtm_root_mem,
+                                            rtm_root_mem_size);
+    } else {
+      // TODO(k-ye) In case no SNodes is defined, we should not allocate
+      // |root_buffer_| at all. However, that requires us to change the Metal
+      // kernels so that |root_buffer_| isn't a required argument.
+      TI_TRACE(
+          "LLVM root buffer size is 0, allocating directly from the memory "
+          "pool");
+      root_buffer_mem_ =
+          std::make_unique<BufferMemoryView>(taichi_page_size, mem_pool_);
+      root_buffer_ = new_mtl_buffer_no_copy(
+          device_.get(), root_buffer_mem_->ptr(), root_buffer_mem_->size());
+    }
     TI_ASSERT(root_buffer_ != nullptr);
+
+    // Make sure we don't have to round up global temporaries' buffer size.
+    TI_ASSERT(iroundup(taichi_global_tmp_buffer_size, taichi_page_size) ==
+              taichi_global_tmp_buffer_size);
+    global_tmps_mem_begin_ = params.llvm_ctx->lookup_function<uint8 *(void *)>(
+        "Runtime_get_temporaries")(llvm_rtm);
+    global_tmps_buffer_ = new_mtl_buffer_no_copy(
+        device_.get(), global_tmps_mem_begin_, taichi_global_tmp_buffer_size);
+    TI_ASSERT(global_tmps_buffer_ != nullptr);
   }
 
   void register_taichi_kernel(
@@ -269,6 +319,8 @@ class MetalRuntime::Impl {
       size_t global_tmps_size, const MetalKernelArgsAttributes &args_attribs) {
     TI_ASSERT(compiled_taichi_kernels_.find(taichi_kernel_name) ==
               compiled_taichi_kernels_.end());
+    TI_ASSERT(iroundup(global_tmps_size, taichi_page_size) <=
+              taichi_global_tmp_buffer_size);
 
     if (config_->print_kernel_llvm_ir) {
       // If users have enabled |print_kernel_llvm_ir|, it probably means that
@@ -277,11 +329,16 @@ class MetalRuntime::Impl {
       TI_INFO("Metal source code for kernel <{}>\n{}", taichi_kernel_name,
               mtl_kernel_source_code);
     }
+    CompiledTaichiKernel::Params params;
+    params.taichi_kernel_name = taichi_kernel_name;
+    params.mtl_source_code = mtl_kernel_source_code;
+    params.mtl_kernels_attribs = &kernels_attribs;
+    params.args_attribs = &args_attribs;
+    params.device = device_.get();
+    params.mem_pool = mem_pool_;
+    params.profiler = profiler_;
     compiled_taichi_kernels_[taichi_kernel_name] =
-        std::make_unique<CompiledTaichiKernel>(
-            taichi_kernel_name, mtl_kernel_source_code, kernels_attribs,
-            global_tmps_size, args_attribs, device_.get(), mem_pool_,
-            profiler_);
+        std::make_unique<CompiledTaichiKernel>(params);
     TI_INFO("Registered Taichi kernel <{}>", taichi_kernel_name);
   }
 
@@ -303,21 +360,21 @@ class MetalRuntime::Impl {
         // in the previous serial kernel. We need to read it back to the host
         // side to decide how many kernel threads to launch.
         synchronize();
-        const char *global_tmps_membegin = (char *)ctk.global_tmps_mem.ptr();
-        auto load_global_tmp = [=](int offset) -> int {
-          return *reinterpret_cast<const int *>(global_tmps_membegin + offset);
-        };
-        const int begin = ka->range_for_attribs.const_begin
-                              ? ka->range_for_attribs.begin
-                              : load_global_tmp(ka->range_for_attribs.begin);
+        const int begin =
+            ka->range_for_attribs.const_begin
+                ? ka->range_for_attribs.begin
+                : load_global_tmp<int>(ka->range_for_attribs.begin);
         const int end = ka->range_for_attribs.const_end
                             ? ka->range_for_attribs.end
-                            : load_global_tmp(ka->range_for_attribs.end);
+                            : load_global_tmp<int>(ka->range_for_attribs.end);
         TI_ASSERT(ka->num_threads == -1);
         ka->num_threads = end - begin;
       }
-      mk->launch(root_buffer_.get(), ctk.global_tmps_buffer.get(),
-                 ctk.args_buffer.get(), cur_command_buffer_.get());
+      MtlDataBuffers data_buffers;
+      data_buffers.root = root_buffer_.get();
+      data_buffers.global_tmps = global_tmps_buffer_.get();
+      data_buffers.args = ctk.args_buffer.get();
+      mk->launch(std::move(data_buffers), cur_command_buffer_.get());
     }
     if (args_blitter) {
       // TODO(k-ye): One optimization is to synchronize only when we absolutely
@@ -341,14 +398,23 @@ class MetalRuntime::Impl {
     cur_command_buffer_ = new_command_buffer(command_queue_.get());
     TI_ASSERT(cur_command_buffer_ != nullptr);
   }
+
+  template <typename T>
+  inline T load_global_tmp(int offset) const {
+    return *reinterpret_cast<const T *>(global_tmps_mem_begin_ + offset);
+  }
+
   CompileConfig *const config_;
   MemoryPool *const mem_pool_;
   ProfilerBase *const profiler_;
-  BufferMemoryView root_buffer_mem_;
   nsobj_unique_ptr<MTLDevice> device_{nullptr};
   nsobj_unique_ptr<MTLCommandQueue> command_queue_{nullptr};
   nsobj_unique_ptr<MTLCommandBuffer> cur_command_buffer_{nullptr};
+  // |root_buffer_mem_| is used only when the LLVM's root size is 0.
+  std::unique_ptr<BufferMemoryView> root_buffer_mem_;
   nsobj_unique_ptr<MTLBuffer> root_buffer_{nullptr};
+  uint8_t *global_tmps_mem_begin_;
+  nsobj_unique_ptr<MTLBuffer> global_tmps_buffer_{nullptr};
   std::unordered_map<std::string, std::unique_ptr<CompiledTaichiKernel>>
       compiled_taichi_kernels_;
 };
@@ -357,10 +423,7 @@ class MetalRuntime::Impl {
 
 class MetalRuntime::Impl {
  public:
-  Impl(size_t root_size, CompileConfig *config, MemoryPool *mem_pool,
-       ProfilerBase *profiler) {
-    TI_ERROR("Metal not supported on the current OS");
-  }
+  explicit Impl(Params) { TI_ERROR("Metal not supported on the current OS"); }
 
   void register_taichi_kernel(
       const std::string &taichi_kernel_name,
@@ -380,9 +443,8 @@ class MetalRuntime::Impl {
 
 #endif  // TI_PLATFORM_OSX
 
-MetalRuntime::MetalRuntime(size_t root_size, CompileConfig *config,
-                           MemoryPool *mem_pool, ProfilerBase *profiler)
-    : impl_(std::make_unique<Impl>(root_size, config, mem_pool, profiler)) {}
+MetalRuntime::MetalRuntime(Params params)
+    : impl_(std::make_unique<Impl>(std::move(params))) {}
 
 MetalRuntime::~MetalRuntime() {}
 
