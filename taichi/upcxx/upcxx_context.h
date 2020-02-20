@@ -4,6 +4,8 @@
 #include <iostream>
 #include <sstream>
 
+=======
+#pragma once
 // A structure to handle the UPC++ runtime
 
 TLANG_NAMESPACE_BEGIN
@@ -32,6 +34,7 @@ public:
   }
 
 };
+
 
 
 TLANG_NAMESPACE_END
