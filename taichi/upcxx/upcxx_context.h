@@ -1,8 +1,9 @@
+#pragma once
+
 #include <upcxx/backend.hpp>
 #include <iostream>
 #include <sstream>
 
-#pragma once
 // A structure to handle the UPC++ runtime
 
 TLANG_NAMESPACE_BEGIN
@@ -16,21 +17,21 @@ public:
 
   TaichiUPCxxContext(){
     upcxx::init();
-    rank_me = upcxx::rank_me()
-    rank_n = upcxx::rank_n()
-    rank_me_local = upcxx::local_team().rank_me()
-    rank_n_local = upcxx::local_team().rank_n()
+    rank_me = upcxx::rank_me();
+    rank_n = upcxx::rank_n();
+    rank_me_local = upcxx::local_team().rank_me();
+    rank_n_local = upcxx::local_team().rank_n();
 
     std::ostringstream oss;
     oss << "Hello from "<<rank_me<<" of "<<rank_n<<'\n';
     std::cout << oss.str() << std::flush;
   }
 
-  ~TaichiLLVMContext(){
+  ~TaichiUPCxxContext(){
     upcxx::finalize();
   }
 
-}
+};
 
 
 TLANG_NAMESPACE_END

@@ -22,6 +22,10 @@
 #include <dlfcn.h>
 #endif
 
+#if defined(TI_WITH_UPCXX)
+#include <taichi/upcxx/upcxx_context.h>
+#endif
+
 TLANG_NAMESPACE_BEGIN
 
 extern Program *current_program;
@@ -58,6 +62,10 @@ class Program {
   std::unique_ptr<ProfilerBase> profiler_llvm;
 
   std::string layout_fn;
+
+#if defined(TI_WITH_UPCXX)
+  TaichiUPCxxContext upcxx_context;
+#endif
 
   Program() : Program(default_compile_config.arch) {
   }
