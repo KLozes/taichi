@@ -1,4 +1,4 @@
-// A helper for the llvm backend
+// A helper for llvm backends
 
 #include <llvm/Transforms/Utils/Cloning.h>
 #include "llvm/ADT/APFloat.h"
@@ -26,12 +26,13 @@
 #include <llvm/Demangle/Demangle.h>
 
 #include "tlang_util.h"
-#include "taichi_llvm_context.h"
+#include "llvm_context.h"
 #include "taichi/backends/llvm_jit_cpu.h"
 
 TLANG_NAMESPACE_BEGIN
 
 TaichiLLVMContext::TaichiLLVMContext(Arch arch) : arch(arch) {
+  TI_TRACE("Creating Taichi llvm context for arch: {}", arch_name(arch));
   llvm::remove_fatal_error_handler();
   llvm::install_fatal_error_handler(
       [](void *user_data, const std::string &reason, bool gen_crash_diag) {
@@ -54,9 +55,7 @@ TaichiLLVMContext::TaichiLLVMContext(Arch arch) : arch(arch) {
 #endif
   }
   ctx = std::make_unique<llvm::LLVMContext>();
-  TI_TRACE("Creating llvm context for arch: {}", arch_name(arch));
-  llvm::ExitOnError exit_on_err;
-  jit = exit_on_err(TaichiLLVMJITCPU::create(arch));
+  jit = create_llvm_jit_session_cpu(arch);
 }
 
 llvm::Type *TaichiLLVMContext::get_data_type(DataType dt) {
@@ -462,6 +461,18 @@ void TaichiLLVMContext::print_huge_functions() {
 }
 
 TaichiLLVMContext::~TaichiLLVMContext() {
+}
+
+llvm::DataLayout TaichiLLVMContext::get_data_layout() {
+  return jit->get_data_layout();
+}
+
+void TaichiLLVMContext::add_module(std::unique_ptr<llvm::Module> module) {
+  jit->add_module(std::move(module));
+}
+
+llvm::JITSymbol TaichiLLVMContext::lookup_symbol(const std::string &name) {
+  return jit->lookup(name);
 }
 
 template llvm::Value *TaichiLLVMContext::get_constant(float32 t);
