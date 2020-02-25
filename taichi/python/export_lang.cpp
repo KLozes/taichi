@@ -1,13 +1,13 @@
 // Bindings for the python frontend
 
-#include "tlang.h"
+#include "../tlang.h"
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <taichi/extension.h>
 #include <taichi/common/interface.h>
 #include <taichi/python/export.h>
-#include <taichi/visual/gui.h>
-#include "svd.h"
+#include <taichi/gui/gui.h>
+#include "../svd.h"
 
 TI_NAMESPACE_BEGIN
 
@@ -18,6 +18,7 @@ TI_NAMESPACE_END
 TLANG_NAMESPACE_BEGIN
 
 std::string compiled_lib_dir;
+std::string runtime_tmp_dir;
 
 Expr expr_index(const Expr &expr, const Expr &index) {
   return expr[index];
@@ -44,19 +45,22 @@ void export_lang(py::module &m) {
 
   py::enum_<Arch>(m, "Arch", py::arithmetic())
 #define PER_ARCH(x) .value(#x, Arch::x)
-#include "inc/archs.inc.h"
+#include <taichi/inc/archs.inc.h>
 #undef PER_ARCH
       .export_values();
 
+  m.def("arch_name", arch_name);
+  m.def("arch_from_name", arch_from_name);
+
   py::enum_<SNodeType>(m, "SNodeType", py::arithmetic())
 #define PER_SNODE(x) .value(#x, SNodeType::x)
-#include "inc/snodes.inc.h"
+#include <taichi/inc/snodes.inc.h>
 #undef PER_SNODE
       .export_values();
 
   py::enum_<Extension>(m, "Extension", py::arithmetic())
 #define PER_EXTENSION(x) .value(#x, Extension::x)
-#include "inc/extensions.inc.h"
+#include <taichi/inc/extensions.inc.h>
 #undef PER_EXTENSION
       .export_values();
 
@@ -87,6 +91,7 @@ void export_lang(py::module &m) {
       .def_readwrite("verbose", &CompileConfig::verbose)
       .def_readwrite("demote_dense_struct_fors",
                      &CompileConfig::demote_dense_struct_fors)
+      .def_readwrite("use_unified_memory", &CompileConfig::use_unified_memory)
       .def_readwrite("enable_profiler", &CompileConfig::enable_profiler)
       .def_readwrite("default_fp", &CompileConfig::default_fp)
       .def_readwrite("default_ip", &CompileConfig::default_ip)
@@ -114,12 +119,11 @@ void export_lang(py::module &m) {
              return (void *)(program->get_profiler());
            })
       .def("finalize", &Program::finalize)
-      .def(
-          "get_root",
-          [&](Program *program) -> SNode * {
-            return program->snode_root.get();
-          },
-          py::return_value_policy::reference)
+      .def("get_root",
+           [&](Program *program) -> SNode * {
+             return program->snode_root.get();
+           },
+           py::return_value_policy::reference)
       .def("get_snode_writer", &Program::get_snode_writer)
       .def("get_total_compilation_time", &Program::get_total_compilation_time)
       .def("synchronize", &Program::synchronize);
@@ -143,13 +147,13 @@ void export_lang(py::module &m) {
                                const std::vector<int> &))(&SNode::dense),
            py::return_value_policy::reference)
       .def("pointer",
-          (SNode & (SNode::*)(const std::vector<Index> &,
-                              const std::vector<int> &))(&SNode::pointer),
-          py::return_value_policy::reference)
+           (SNode & (SNode::*)(const std::vector<Index> &,
+                               const std::vector<int> &))(&SNode::pointer),
+           py::return_value_policy::reference)
       .def("hash",
-          (SNode & (SNode::*)(const std::vector<Index> &,
-                              const std::vector<int> &))(&SNode::hash),
-          py::return_value_policy::reference)
+           (SNode & (SNode::*)(const std::vector<Index> &,
+                               const std::vector<int> &))(&SNode::hash),
+           py::return_value_policy::reference)
       .def("dynamic", &SNode::dynamic_chunked,
            py::return_value_policy::reference)
       .def("bitmasked", &SNode::bitmasked)
@@ -163,6 +167,7 @@ void export_lang(py::module &m) {
            py::return_value_policy::reference)
       .def("lazy_grad", &SNode::lazy_grad)
       .def("read_int", &SNode::read_int)
+      .def("read_uint", &SNode::read_uint)
       .def("read_float", &SNode::read_float)
       .def("has_grad", &SNode::has_grad)
       .def("is_primal", &SNode::is_primal)
@@ -399,6 +404,10 @@ void export_lang(py::module &m) {
     data_type.value(data_type_name(DataType(t)).c_str(), DataType(t));
   data_type.export_values();
 
+  m.def("is_integral", is_integral);
+  m.def("is_signed", is_signed);
+  m.def("is_unsigned", is_unsigned);
+
   m.def("global_new", static_cast<Expr (*)(Expr, DataType)>(global_new));
   m.def("set_global_grad", [&](const Expr &expr) {
     TI_ASSERT(expr.is<GlobalVariableExpression>());
@@ -445,6 +454,7 @@ void export_lang(py::module &m) {
   m.def("libdevice_path", libdevice_path);
 
   m.def("set_lib_dir", [&](const std::string &dir) { compiled_lib_dir = dir; });
+  m.def("set_tmp_dir", [&](const std::string &dir) { runtime_tmp_dir = dir; });
 
   m.def("get_commit_hash", get_commit_hash);
   m.def("get_version_string", get_version_string);

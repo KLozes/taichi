@@ -27,12 +27,15 @@ environment:
 
 skip_commits:
   files:
-    - README.md
+    - '*.md'
     - docs
     - benchmarks
     - examples
     - misc
     - '.*'
+
+cache:
+  - build -> CMakeLists.txt, cmake/*
 
 build_script:
   - set TAICHI_REPO_DIR=C:\taichi

@@ -8,14 +8,14 @@
 #include "snode.h"
 
 TLANG_NAMESPACE_BEGIN
-class TaichiLLVMJIT;
+class TaichiLLVMJITCPU;
 
-void *jit_lookup_name(TaichiLLVMJIT *jit, const std::string &name);
+void *jit_lookup_name(TaichiLLVMJITCPU *jit, const std::string &name);
 
 class TaichiLLVMContext {
  public:
   std::unique_ptr<llvm::LLVMContext> ctx;
-  std::unique_ptr<TaichiLLVMJIT> jit;
+  std::unique_ptr<TaichiLLVMJITCPU> jit;
   std::unique_ptr<llvm::Module> runtime_module, struct_module;
   Arch arch;
 
@@ -23,19 +23,23 @@ class TaichiLLVMContext {
 
   TaichiLLVMContext(Arch arch);
 
-  ~TaichiLLVMContext();
-
   std::unique_ptr<llvm::Module> get_init_module();
 
   std::unique_ptr<llvm::Module> clone_struct_module();
 
   void set_struct_module(const std::unique_ptr<llvm::Module> &module);
 
+  virtual void *lookup_function_pointer(const std::string &name) {
+    auto func_ptr = jit_lookup_name(jit.get(), name);
+    return func_ptr;
+  }
+
+  // Unfortunately, this can't be virtual since it's a template function
   template <typename T>
-  auto lookup_function(const std::string &name) {
+  std::function<T> lookup_function(const std::string &name) {
     using FuncT = typename std::function<T>;
     auto ret =
-        FuncT((function_pointer_type<FuncT>)jit_lookup_name(jit.get(), name));
+        FuncT((function_pointer_type<FuncT>)lookup_function_pointer(name));
     TI_ASSERT(ret != nullptr);
     return ret;
   }
@@ -66,6 +70,8 @@ class TaichiLLVMContext {
   void print_huge_functions();
 
   static int num_instructions(llvm::Function *func);
+
+  virtual ~TaichiLLVMContext();
 };
 
 TLANG_NAMESPACE_END
