@@ -62,4 +62,5 @@ i32 test_upcxx(Context *context) {
   auto runtime = context->runtime;
   taichi_printf(runtime, "Runtime %p\n", runtime);
   runtime->upcxx_hello();
+
 }

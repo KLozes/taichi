@@ -64,6 +64,10 @@ class Program {
   TaichiUPCxxContext upcxx_context;
 #endif
 
+#if defined(TI_WITH_UPCXX)
+  TaichiUPCxxContext upcxx_context;
+#endif
+
   Program() : Program(default_compile_config.arch) {
   }
 
