@@ -31,6 +31,16 @@ public:
     upcxx::finalize();
   }
 
+  void hello(){
+    std::ostringstream oss;
+    oss << "Hello from "<<upcxx::rank_me()<<" of "<<upcxx::rank_n()<<'\n';
+    std::cout << oss.str() << std::flush;
+  }
+
+  static void static_hello(){
+    return hello();
+  }
+
 };
 
 
