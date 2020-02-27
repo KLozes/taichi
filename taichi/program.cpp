@@ -161,6 +161,12 @@ void Program::initialize_runtime_system(StructCompiler *scomp) {
   runtime->call<void *, void *>("Runtime_set_assert_failed", llvm_runtime,
                                 (void *)assert_failed_host);
 
+#if defined(TI_WITH_UPCXX)
+  runtime->call<void *, void *, void *>("Runtime_initialize_upcxx",
+                                        llvm_runtime, &upcxx_context,
+                                        (void *)TaichiUPCxxContext::static_hello);
+#endif
+
   if (arch_use_host_memory(config.arch)) {
     // Profiler functions can only be called on host kernels
     runtime->call<void *, void *>("Runtime_set_profiler", llvm_runtime,
