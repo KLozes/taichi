@@ -3,6 +3,7 @@ from .matrix import Matrix
 from .transformer import TaichiSyntaxError
 from .ndrange import ndrange, GroupedNDRange
 from copy import deepcopy as _deepcopy
+import functools
 import os
 
 core = taichi_lang_core
@@ -57,6 +58,24 @@ def init(default_fp=None, default_ip=None, print_preprocessed=None, debug=None, 
   kwargs = _deepcopy(kwargs)
   import taichi as ti
   ti.reset()
+
+  if default_fp is None: # won't override
+    dfl_fp = os.environ.get("TI_DEFAULT_FP")
+    if dfl_fp == 32:
+      default_fp = core.DataType.f32
+    elif dfl_fp == 64:
+      default_fp = core.DataType.f64
+    elif dfl_fp is not None:
+      raise ValueError(f'Unrecognized TI_DEFAULT_FP: {dfl_fp}, should be 32 or 64')
+  if default_ip is None:
+    dfl_ip = os.environ.get("TI_DEFAULT_IP")
+    if dfl_ip == 32:
+      default_ip = core.DataType.i32
+    elif dfl_ip == 64:
+      default_ip = core.DataType.i64
+    elif dfl_ip is not None:
+      raise ValueError(f'Unrecognized TI_DEFAULT_IP: {dfl_ip}, should be 32 or 64')
+
   if default_fp is not None:
     ti.get_runtime().set_default_fp(default_fp)
   if default_ip is not None:
@@ -77,6 +96,26 @@ def init(default_fp=None, default_ip=None, print_preprocessed=None, debug=None, 
 
   for k, v in kwargs.items():
     setattr(ti.cfg, k, v)
+
+  def boolean_config(key, name=None):
+    if name is None:
+      name = 'TI_' + key.upper()
+    value = os.environ.get(name)
+    if value is not None:
+      setattr(ti.cfg, key, len(value) and bool(int(value)))
+
+  # does override
+  boolean_config("print_ir")
+  boolean_config("verbose")
+  boolean_config("fast_math")
+  arch = os.environ.get("TI_ARCH")
+  if arch is not None:
+    ti.cfg.arch = ti.core.arch_from_name(arch)
+
+  log_level = os.environ.get("TI_LOG_LEVEL")
+  if log_level is not None:
+    ti.set_logging_level(log_level.lower())
+
   ti.get_runtime().create_program()
 
 def cache_shared(v):
@@ -208,6 +247,13 @@ def _get_or_make_arch_checkers(kwargs):
 def all_archs_with(**kwargs):
   kwargs = _deepcopy(kwargs)
   def decorator(test):
+    # @pytest.mark.parametrize decorator only knows about regular function args,
+    # without *args or **kwargs. By decorating with @functools.wraps, the
+    # signature of |test| is preserved, so that @ti.all_archs can be used after
+    # the parametrization decorator.
+    #
+    # Full discussion: https://github.com/pytest-dev/pytest/issues/6810
+    @functools.wraps(test)
     def wrapped(*test_args, **test_kwargs):
       import taichi as ti
       can_run_on = test_kwargs.pop(
@@ -252,6 +298,7 @@ def archs_excluding(*excluded_archs, **kwargs):
   excluded_archs = set(excluded_archs)
 
   def decorator(test):
+    @functools.wraps(test)
     def wrapped(*test_args, **test_kwargs):
       def checker(arch): return arch not in excluded_archs
       _get_or_make_arch_checkers(test_kwargs).register(checker)
@@ -275,6 +322,7 @@ def require(*exts):
   assert all([isinstance(e, core.Extension) for e in exts])
 
   def decorator(test):
+    @functools.wraps(test)
     def wrapped(*test_args, **test_kwargs):
       def checker(arch): return all([is_supported(arch, e) for e in exts])
       _get_or_make_arch_checkers(test_kwargs).register(checker)

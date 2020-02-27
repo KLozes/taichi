@@ -1,14 +1,9 @@
-// A LLVM JIT compiler wrapper
-#pragma once
+// A LLVM JIT compiler for CPU archs wrapper
 
-// Based on
-// https://llvm.org/docs/tutorial/BuildingAJIT3.html
-
-// Note that
-// https://llvm.org/docs/tutorial/BuildingAJIT2.html
-// leads to a JIT that crashes all C++ exception after JIT session
-// destruction...
-
+#include <llvm/Support/TargetRegistry.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/Analysis/TargetTransformInfo.h>
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #if defined(min)
 #undef min
 #endif
@@ -39,18 +34,35 @@
 #include "llvm/Transforms/IPO.h"
 #include <memory>
 #include "../tlang_util.h"
+#include "../program.h"
 #include "jit_session.h"
+
+// Based on
+// https://llvm.org/docs/tutorial/BuildingAJIT3.html
+// (Note that
+// https://llvm.org/docs/tutorial/BuildingAJIT2.html
+// leads to a JIT that crashes all C++ exception after JIT session
+// destruction.)
 
 TLANG_NAMESPACE_BEGIN
 
 using namespace llvm;
 using namespace llvm::orc;
 
-std::string compile_module_to_ptx(std::unique_ptr<llvm::Module> &module);
-int compile_ptx_and_launch(const std::string &ptx,
-                           const std::string &kernel_name,
-                           void *);
-void global_optimize_module_cpu(std::unique_ptr<llvm::Module> &module);
+class JITSessionCPU;
+
+class JITModuleCPU : public JITModule {
+ private:
+  JITSessionCPU *session;
+  VModuleKey key;
+
+ public:
+  JITModuleCPU(JITSessionCPU *session, VModuleKey key)
+      : session(session), key(key) {
+  }
+
+  void *lookup_function(const std::string &name) override;
+};
 
 class JITSessionCPU : public JITSession {
  private:
@@ -102,11 +114,11 @@ class JITSessionCPU : public JITSession {
     llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
   }
 
-  const DataLayout &get_data_layout() const override {
+  DataLayout get_data_layout() override {
     return DL;
   }
 
-  VModuleKey add_module(std::unique_ptr<llvm::Module> M) override {
+  JITModule *add_module(std::unique_ptr<llvm::Module> M) override {
     TI_ASSERT(M);
     global_optimize_module_cpu(M);
     // Create a new VModuleKey.
@@ -129,23 +141,37 @@ class JITSessionCPU : public JITSession {
 
     // Add the module to the JIT with the new key.
     cantFail(CODLayer.addModule(K, std::move(M)));
-    return K;
+    auto new_module = std::make_unique<JITModuleCPU>(this, K);
+    auto new_module_raw_ptr = new_module.get();
+    modules.push_back(std::move(new_module));
+    return new_module_raw_ptr;
   }
 
-  JITSymbol lookup(const std::string Name) override {
+  void *lookup(const std::string Name) override {
     std::string MangledName;
     raw_string_ostream MangledNameStream(MangledName);
     Mangler::getNameWithPrefix(MangledNameStream, Name, DL);
-    return CODLayer.findSymbol(MangledNameStream.str(), true);
+    auto symbol = CODLayer.findSymbol(MangledNameStream.str(), true);
+    if (!symbol)
+      TI_ERROR("Function \"{}\" not found", Name);
+    return (void *)(llvm::cantFail(symbol.getAddress()));
   }
 
+  void *lookup_in_module(VModuleKey key, const std::string Name) {
+    std::string MangledName;
+    raw_string_ostream MangledNameStream(MangledName);
+    Mangler::getNameWithPrefix(MangledNameStream, Name, DL);
+    auto symbol = CODLayer.findSymbolIn(key, MangledNameStream.str(), true);
+    if (!symbol)
+      TI_ERROR("Function \"{}\" not found", Name);
+    return (void *)(llvm::cantFail(symbol.getAddress()));
+  }
+
+  /*
   void remove_module(VModuleKey K) override {
     cantFail(CODLayer.removeModule(K));
   }
-
-  std::size_t get_type_size(llvm::Type *type) const override {
-    return DL.getTypeAllocSize(type);
-  }
+  */
 
  private:
   std::unique_ptr<llvm::Module> optimize_module(
@@ -167,21 +193,97 @@ class JITSessionCPU : public JITSession {
 
     return M;
   }
+
+  static void global_optimize_module_cpu(
+      std::unique_ptr<llvm::Module> &module) {
+    TI_AUTO_PROF
+    auto JTMB = JITTargetMachineBuilder::detectHost();
+    if (!JTMB) {
+      TI_ERROR("Target machine creation failed.");
+    }
+    module->setTargetTriple(JTMB->getTargetTriple().str());
+    llvm::Triple triple(module->getTargetTriple());
+
+    std::string err_str;
+    const llvm::Target *target =
+        TargetRegistry::lookupTarget(triple.str(), err_str);
+    TI_ERROR_UNLESS(target, err_str);
+
+    TargetOptions options;
+    options.PrintMachineCode = false;
+    bool fast_math = get_current_program().config.fast_math;
+    if (fast_math) {
+      options.AllowFPOpFusion = FPOpFusion::Fast;
+      options.UnsafeFPMath = 1;
+      options.NoInfsFPMath = 1;
+      options.NoNaNsFPMath = 1;
+    } else {
+      options.AllowFPOpFusion = FPOpFusion::Strict;
+      options.UnsafeFPMath = 0;
+      options.NoInfsFPMath = 0;
+      options.NoNaNsFPMath = 0;
+    }
+    options.HonorSignDependentRoundingFPMathOption = false;
+    options.NoZerosInBSS = false;
+    options.GuaranteedTailCallOpt = false;
+    options.StackAlignmentOverride = 0;
+
+    legacy::FunctionPassManager function_pass_manager(module.get());
+    legacy::PassManager module_pass_manager;
+
+    llvm::StringRef mcpu = llvm::sys::getHostCPUName();
+    std::unique_ptr<TargetMachine> target_machine(target->createTargetMachine(
+        triple.str(), mcpu.str(), "", options, llvm::Reloc::PIC_,
+        llvm::CodeModel::Small, CodeGenOpt::Aggressive));
+
+    TI_ERROR_UNLESS(target_machine.get(), "Could not allocate target machine!");
+
+    module->setDataLayout(target_machine->createDataLayout());
+
+    module_pass_manager.add(createTargetTransformInfoWrapperPass(
+        target_machine->getTargetIRAnalysis()));
+    function_pass_manager.add(createTargetTransformInfoWrapperPass(
+        target_machine->getTargetIRAnalysis()));
+
+    PassManagerBuilder b;
+    b.OptLevel = 3;
+    b.Inliner = createFunctionInliningPass(b.OptLevel, 0, false);
+    b.LoopVectorize = true;
+    b.SLPVectorize = true;
+
+    target_machine->adjustPassManager(b);
+
+    b.populateFunctionPassManager(function_pass_manager);
+    b.populateModulePassManager(module_pass_manager);
+
+    function_pass_manager.doInitialization();
+    for (llvm::Module::iterator i = module->begin(); i != module->end(); i++)
+      function_pass_manager.run(*i);
+
+    function_pass_manager.doFinalization();
+
+    auto t = Time::get_time();
+    module_pass_manager.run(*module);
+    t = Time::get_time() - t;
+    // TI_INFO("Global optimization time: {} ms", t * 1000);
+    if (get_current_program().config.print_kernel_llvm_ir_optimized) {
+      TI_INFO("Global optimized IR:");
+      module->print(llvm::errs(), nullptr);
+    }
+  }
 };
 
-inline std::unique_ptr<JITSession> create_llvm_jit_session_cpu(Arch arch) {
+void *JITModuleCPU::lookup_function(const std::string &name) {
+  return session->lookup_in_module(key, name);
+}
+
+std::unique_ptr<JITSession> create_llvm_jit_session_cpu(Arch arch) {
   std::unique_ptr<JITTargetMachineBuilder> jtmb;
-  if (arch_is_cpu(arch)) {
-    auto JTMB = JITTargetMachineBuilder::detectHost();
-    if (!JTMB)
-      TI_ERROR("LLVM TargetMachineBuilder has failed.");
-    jtmb = std::make_unique<JITTargetMachineBuilder>(std::move(*JTMB));
-  } else {
-    TI_ASSERT(arch == Arch::cuda);
-    Triple triple("nvptx64", "nvidia", "cuda");
-    jtmb = std::make_unique<JITTargetMachineBuilder>(triple);
-    TI_WARN("Not actually supported");
-  }
+  TI_ASSERT(arch_is_cpu(arch));
+  auto JTMB = JITTargetMachineBuilder::detectHost();
+  if (!JTMB)
+    TI_ERROR("LLVM TargetMachineBuilder has failed.");
+  jtmb = std::make_unique<JITTargetMachineBuilder>(std::move(*JTMB));
 
   auto DL = jtmb->getDefaultDataLayoutForTarget();
   if (!DL) {

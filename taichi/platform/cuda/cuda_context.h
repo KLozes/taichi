@@ -1,14 +1,14 @@
+#pragma once
+
 #if defined(TI_WITH_CUDA)
-#include "llvm_jit_cpu.h"
 #include <taichi/profiler.h>
-#include <taichi/cuda_utils.h>
+#include <taichi/platform/cuda/cuda_utils.h>
 #include <mutex>
 
 TLANG_NAMESPACE_BEGIN
 
 class CUDAContext {
   CUdevice device;
-  std::vector<CUmodule> cudaModules;
   CUcontext context;
   int dev_count;
   void *context_buffer;
@@ -23,11 +23,7 @@ class CUDAContext {
     return dev_count != 0;
   }
 
-  CUmodule compile(const std::string &ptx);
-
-  CUfunction get_function(CUmodule module, const std::string &func_name);
-
-  void launch(CUfunction func,
+  void launch(void *func,
               const std::string &task_name,
               ProfilerBase *profiler,
               void *context_ptr,

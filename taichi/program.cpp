@@ -16,8 +16,7 @@
 #if defined(TI_WITH_CUDA)
 
 #include <cuda_runtime.h>
-
-#include "backends/cuda_context.h"
+#include <taichi/platform/cuda/cuda_context.h>
 
 #endif
 
@@ -108,42 +107,28 @@ FunctionType Program::compile(Kernel &kernel) {
 // For CPU and CUDA archs only
 void Program::initialize_runtime_system(StructCompiler *scomp) {
   auto tlctx = llvm_context_host.get();
-  auto initialize_runtime =
-      tlctx->lookup_function<void(void *, void *, std::size_t, void *, void *)>(
-          "Runtime_initialize");
-
-  auto initialize_runtime2 =
-      tlctx->lookup_function<void(void *, int, int)>("Runtime_initialize2");
-
-  auto set_assert_failed =
-      tlctx->lookup_function<void(void *, void *)>("Runtime_set_assert_failed");
-
-  auto allocate_ambient =
-      tlctx->lookup_function<void(void *, int)>("Runtime_allocate_ambient");
-
-  auto initialize_allocator =
-      tlctx->lookup_function<void *(void *, int, std::size_t)>(
-          "NodeAllocator_initialize");
-
-  auto runtime_initialize_thread_pool =
-      tlctx->lookup_function<void(void *, void *, void *)>(
-          "Runtime_initialize_thread_pool");
+  auto runtime = tlctx->runtime_jit_module;
 
   // By the time this creator is called, "this" is already destroyed.
   // Therefore it is necessary to capture members by values.
   auto snodes = scomp->snodes;
-  auto root_id = snode_root->id;
+  int root_id = snode_root->id;
 
   TI_TRACE("Allocating data structure of size {} B", scomp->root_size);
-  initialize_runtime(&llvm_runtime, this, scomp->root_size,
-                     (void *)&taichi_allocate_aligned, (void *)std::printf);
+
+  runtime->call<void *, void *, std::size_t, void *, void *>(
+      "Runtime_initialize", &llvm_runtime, this, (std::size_t)scomp->root_size,
+      (void *)&taichi_allocate_aligned, (void *)std::printf);
   TI_TRACE("Runtime initialized");
 
   auto mem_req_queue = tlctx->lookup_function<void *(void *)>(
       "Runtime_get_mem_req_queue")(llvm_runtime);
+
   memory_pool->set_queue((MemRequestQueue *)mem_req_queue);
 
-  initialize_runtime2(llvm_runtime, root_id, (int)snodes.size());
+  runtime->call<void *, int, int>("Runtime_initialize2", llvm_runtime, root_id,
+                                  (int)snodes.size());
+
   for (int i = 0; i < (int)snodes.size(); i++) {
     if (snodes[i]->type == SNodeType::pointer ||
         snodes[i]->type == SNodeType::dynamic) {
@@ -161,26 +146,29 @@ void Program::initialize_runtime_system(StructCompiler *scomp) {
       TI_TRACE("Initializing allocator for snode {} (node size {})",
                snodes[i]->id, node_size);
       auto rt = llvm_runtime;
-      initialize_allocator(rt, i, node_size);
+      runtime->call<void *, int, std::size_t>("NodeAllocator_initialize", rt, i,
+                                              node_size);
       TI_TRACE("Allocating ambient element for snode {} (node size {})",
                snodes[i]->id, node_size);
-      allocate_ambient(rt, i);
+      runtime->call<void *, int>("Runtime_allocate_ambient", rt, i);
     }
   }
 
-  runtime_initialize_thread_pool(llvm_runtime, &thread_pool,
-                                 (void *)ThreadPool::static_run);
-  set_assert_failed(llvm_runtime, (void *)assert_failed_host);
+  runtime->call<void *, void *, void *>("Runtime_initialize_thread_pool",
+                                        llvm_runtime, &thread_pool,
+                                        (void *)ThreadPool::static_run);
+
+  runtime->call<void *, void *>("Runtime_set_assert_failed", llvm_runtime,
+                                (void *)assert_failed_host);
 
   if (arch_use_host_memory(config.arch)) {
     // Profiler functions can only be called on host kernels
-    tlctx->lookup_function<void(void *, void *)>("Runtime_set_profiler")(
-        llvm_runtime, profiler.get());
-
-    tlctx->lookup_function<void(void *, void *)>("Runtime_set_profiler_start")(
-        llvm_runtime, (void *)&ProfilerBase::profiler_start);
-    tlctx->lookup_function<void(void *, void *)>("Runtime_set_profiler_stop")(
-        llvm_runtime, (void *)&ProfilerBase::profiler_stop);
+    runtime->call<void *, void *>("Runtime_set_profiler", llvm_runtime,
+                                  profiler.get());
+    runtime->call<void *, void *>("Runtime_set_profiler_start", llvm_runtime,
+                                  (void *)&ProfilerBase::profiler_start);
+    runtime->call<void *, void *>("Runtime_set_profiler_stop", llvm_runtime,
+                                  (void *)&ProfilerBase::profiler_stop);
   }
 }
 
@@ -190,7 +178,8 @@ void Program::materialize_layout() {
   std::unique_ptr<StructCompiler> scomp = StructCompiler::make(this, Arch::x64);
   scomp->run(*snode_root, true);
 
-  if (arch_is_cpu(config.arch) || config.arch == Arch::cuda) {
+  if (arch_is_cpu(config.arch) || config.arch == Arch::cuda ||
+      config.arch == Arch::metal) {
     initialize_runtime_system(scomp.get());
   }
 

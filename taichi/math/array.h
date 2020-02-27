@@ -5,9 +5,7 @@
 
 #pragma once
 
-#include "array_1d.h"
 #include "array_2d.h"
-#include "array_3d.h"
 
 TI_NAMESPACE_BEGIN
 template <int dim>

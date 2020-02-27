@@ -1,9 +1,9 @@
 #include "memory_pool.h"
 #include <taichi/system/timer.h>
-#include "cuda_utils.h"
+#include "taichi/platform/cuda/cuda_utils.h"
 #if TI_WITH_CUDA
 #include <cuda_runtime.h>
-#include "backends/cuda_context.h"
+#include <taichi/platform/cuda/cuda_context.h>
 #endif
 
 #include "program.h"

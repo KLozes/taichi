@@ -3,7 +3,7 @@
 #include "program.h"
 #if defined(TI_WITH_CUDA)
 #include <cuda_runtime.h>
-#include "cuda_utils.h"
+#include "taichi/platform/cuda/cuda_utils.h"
 #endif
 
 TLANG_NAMESPACE_BEGIN
@@ -80,7 +80,7 @@ void Kernel::operator()() {
     auto &c = program.get_context();
     compiled(c);
   }
-  program.sync = false;
+  program.sync = (program.sync && arch_is_cpu(arch));
 }
 
 void Kernel::set_arg_float(int i, float64 d) {

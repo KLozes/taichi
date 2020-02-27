@@ -9,22 +9,17 @@
 #include "tlang_util.h"
 #include "llvm_fwd.h"
 #include "snode.h"
-#include "backends/jit_session.h"
+#include "jit/jit_session.h"
 
 TLANG_NAMESPACE_BEGIN
 class JITSessionCPU;
 
-void *jit_lookup_name(JITSession *jit, const std::string &name);
-
 class TaichiLLVMContext {
  public:
   std::unique_ptr<llvm::LLVMContext> ctx;
-
- private:
   std::unique_ptr<JITSession> jit;
-
- public:
   std::unique_ptr<llvm::Module> runtime_module, struct_module;
+  JITModule *runtime_jit_module;
   Arch arch;
 
   SNodeAttributes snode_attr;
@@ -37,13 +32,10 @@ class TaichiLLVMContext {
 
   void set_struct_module(const std::unique_ptr<llvm::Module> &module);
 
-  void add_module(std::unique_ptr<llvm::Module> module);
-
-  llvm::JITSymbol lookup_symbol(const std::string &name);
+  JITModule *add_module(std::unique_ptr<llvm::Module> module);
 
   virtual void *lookup_function_pointer(const std::string &name) {
-    auto func_ptr = jit_lookup_name(jit.get(), name);
-    return func_ptr;
+    return jit->lookup(name);
   }
 
   // Unfortunately, this can't be virtual since it's a template function

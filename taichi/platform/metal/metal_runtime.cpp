@@ -192,16 +192,25 @@ class HostMetalArgsBlitter {
     char *const base = (char *)args_mem_->ptr();
     for (int i = 0; i < args_attribs_->args().size(); ++i) {
       const auto &arg = args_attribs_->args()[i];
+      const auto dt = arg.dt;
       char *device_ptr = base + arg.offset_in_mem;
       if (arg.is_array) {
         const void *host_ptr = ctx_->get_arg<void *>(i);
         std::memcpy(device_ptr, host_ptr, arg.stride);
-      } else if (arg.dt == MetalDataType::i32) {
+      } else if (dt == MetalDataType::i32) {
         TO_METAL(int32);
-      } else if (arg.dt == MetalDataType::u32) {
+      } else if (dt == MetalDataType::u32) {
         TO_METAL(uint32);
-      } else if (arg.dt == MetalDataType::f32) {
+      } else if (dt == MetalDataType::f32) {
         TO_METAL(float32);
+      } else if (dt == MetalDataType::i8) {
+        TO_METAL(int8);
+      } else if (dt == MetalDataType::i16) {
+        TO_METAL(int16);
+      } else if (dt == MetalDataType::u8) {
+        TO_METAL(uint8);
+      } else if (dt == MetalDataType::u16) {
+        TO_METAL(uint16);
       } else {
         TI_ERROR("Metal does not support arg type={}",
                  metal_data_type_name(arg.dt));
@@ -229,12 +238,21 @@ class HostMetalArgsBlitter {
         void *host_ptr = ctx_->get_arg<void *>(i);
         std::memcpy(host_ptr, device_ptr, arg.stride);
       } else if (arg.is_return_val) {
-        if (arg.dt == MetalDataType::i32) {
+        const auto dt = arg.dt;
+        if (dt == MetalDataType::i32) {
           TO_HOST(int32);
-        } else if (arg.dt == MetalDataType::u32) {
+        } else if (dt == MetalDataType::u32) {
           TO_HOST(uint32);
-        } else if (arg.dt == MetalDataType::f32) {
+        } else if (dt == MetalDataType::f32) {
           TO_HOST(float32);
+        } else if (dt == MetalDataType::i8) {
+          TO_HOST(int8);
+        } else if (dt == MetalDataType::i16) {
+          TO_HOST(int16);
+        } else if (dt == MetalDataType::u8) {
+          TO_HOST(uint8);
+        } else if (dt == MetalDataType::u16) {
+          TO_HOST(uint16);
         } else {
           TI_ERROR("Metal does not support arg type={}",
                    metal_data_type_name(arg.dt));
@@ -278,6 +296,7 @@ class MetalRuntime::Impl {
 
     auto *llvm_ctx = params.llvm_ctx;
     auto *llvm_rtm = params.llvm_runtime;
+    TI_ASSERT(llvm_ctx != nullptr && llvm_rtm != nullptr);
     const size_t rtm_root_mem_size = llvm_ctx->lookup_function<size_t(void *)>(
         "Runtime_get_root_mem_size")(llvm_rtm);
     if (rtm_root_mem_size > 0) {
@@ -286,6 +305,7 @@ class MetalRuntime::Impl {
                 rtm_root_mem_size);
       auto *rtm_root_mem = params.llvm_ctx->lookup_function<uint8 *(void *)>(
           "Runtime_get_root")(llvm_rtm);
+      TI_ASSERT(rtm_root_mem != nullptr);
       root_buffer_ = new_mtl_buffer_no_copy(device_.get(), rtm_root_mem,
                                             rtm_root_mem_size);
     } else {

@@ -427,7 +427,12 @@ if 1:
     )
 
   def visit_Call(self, node):
-    self.generic_visit(node)
+    if not (isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == 'ti'
+            and node.func.attr == 'static'):
+      # Do not apply the generic visitor if the function called is ti.static
+      self.generic_visit(node)
     if isinstance(node.func, ast.Name):
       func_name = node.func.id
       if func_name == 'print':
@@ -485,16 +490,8 @@ if 1:
           array_dim = self.arg_features[i][1]
           import numpy as np
           array_dt = to_taichi_type(array_dt)
-          if array_dt == ti.f32:
-            dt = self.parse_expr('ti.f32')
-          elif array_dt == ti.f64:
-            dt = self.parse_expr('ti.f64')
-          elif array_dt == ti.i32:
-            dt = self.parse_expr('ti.i32')
-          elif array_dt == ti.i64:
-            dt = self.parse_expr('ti.i64')
-          else:
-            assert False
+          dt_expr = 'ti.' + ti.core.data_type_short_name(array_dt)
+          dt = self.parse_expr(dt_expr)
           arg_init.value.args[0] = dt
           arg_init.value.args[1] = self.parse_expr("{}".format(array_dim))
           arg_decls.append(arg_init)
@@ -532,21 +529,40 @@ if 1:
   
   def visit_Compare(self, node):
     self.generic_visit(node)
-    ret = None
     comparators = [node.left] + node.comparators
-    for i in range(len(node.comparators)):
-      new_cmp = ast.Compare(left=comparators[i], ops=[node.ops[i]], comparators=[comparators[i + 1]])
-      ast.copy_location(new_cmp, node)
-      if ret is None:
-        ret = new_cmp
+    ops = []
+    for i in range(len(node.ops)):
+      if isinstance(node.ops[i], ast.Lt):
+        op_str = 'Lt'
+      elif isinstance(node.ops[i], ast.LtE):
+        op_str = 'LtE'
+      elif isinstance(node.ops[i], ast.Gt):
+        op_str = 'Gt'
+      elif isinstance(node.ops[i], ast.GtE):
+        op_str = 'GtE'
+      elif isinstance(node.ops[i], ast.Eq):
+        op_str = 'Eq'
+      elif isinstance(node.ops[i], ast.NotEq):
+        op_str = 'NotEq'
+      elif isinstance(node.ops[i], ast.In):
+        raise TaichiSyntaxError('"in" is not supported in Taichi kernels.')
+      elif isinstance(node.ops[i], ast.NotIn):
+        raise TaichiSyntaxError('"not in" is not supported in Taichi kernels.')
+      elif isinstance(node.ops[i], ast.Is):
+        raise TaichiSyntaxError('"is" is not supported in Taichi kernels.')
+      elif isinstance(node.ops[i], ast.IsNot):
+        raise TaichiSyntaxError('"is not" is not supported in Taichi kernels.')
       else:
-        ret = ast.BoolOp(op=ast.And(), values=[ret, new_cmp])
-        ret = self.visit_BoolOp(ret)
-        ast.copy_location(ret, node)
-        
-    self.generic_visit(ret)
-    return ret
-    
+        raise Exception(f'Unknown operator {node.ops[i]}')
+      ops += [ast.copy_location(ast.Str(s=op_str), node)]
+
+    call = ast.Call(
+      func=self.parse_expr('ti.chain_compare'),
+      args=[ast.copy_location(ast.List(elts=comparators, ctx=ast.Load()), node),
+            ast.copy_location(ast.List(elts=ops, ctx=ast.Load()), node)],
+      keywords=[])
+    call = ast.copy_location(call, node)
+    return call
 
   def visit_BoolOp(self, node):
     self.generic_visit(node)
