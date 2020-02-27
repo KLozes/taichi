@@ -56,3 +56,11 @@ i32 test_node_allocator(Context *context) {
   }
   return 0;
 }
+
+
+i32 test_upcxx(Context *context) {
+  auto runtime = context->runtime;
+  taichi_printf(runtime, "Runtime %p\n", runtime);
+  runtime->upcxx_hello();
+
+}
