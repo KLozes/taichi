@@ -484,6 +484,9 @@ struct Runtime {
   void (*profiler_start)(Ptr, Ptr);
   void (*profiler_stop)(Ptr);
 
+  upcxx_hello_type upcxx_hello;
+
+
   template <typename T, typename... Args>
   T *create(Args &&... args) {
     auto ptr = (T *)request_allocate_aligned(sizeof(T), 4096);
@@ -704,6 +707,13 @@ void NodeAllocator_initialize(Runtime *runtime,
                               std::size_t node_size) {
   runtime->node_allocators[snode_id] =
       runtime->create<NodeManager>(runtime, node_size, 1024 * 16);
+}
+
+void Runtime_initialize_upcxx(Runtime *runtime,
+                              void *upcxx_context,
+                              void *upcxx_hello) {
+  runtime->upcxx_context = (Ptr)upcxx_context;
+  rumtime->upcxx_hello = (upcxx_hello_type)upcxx_hello;
 }
 
 void Runtime_allocate_ambient(Runtime *runtime, int snode_id) {
